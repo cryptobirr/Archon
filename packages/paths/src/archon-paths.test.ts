@@ -172,16 +172,19 @@ describe('archon-paths', () => {
   });
 
   describe('getCommandFolderSearchPaths', () => {
-    test('returns .archon/commands and defaults by default', () => {
+    test('returns .archon/commands, defaults, and global by default', () => {
+      const globalPath = join(getArchonHome(), '.archon', 'commands');
       const paths = getCommandFolderSearchPaths();
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults', globalPath]);
     });
 
     test('includes configured folder when provided', () => {
+      const globalPath = join(getArchonHome(), '.archon', 'commands');
       const paths = getCommandFolderSearchPaths('.claude/commands/archon');
       expect(paths).toEqual([
         '.archon/commands',
         '.archon/commands/defaults',
+        globalPath,
         '.claude/commands/archon',
       ]);
     });
@@ -197,13 +200,15 @@ describe('archon-paths', () => {
     });
 
     test('does not duplicate .archon/commands if configured', () => {
+      const globalPath = join(getArchonHome(), '.archon', 'commands');
       const paths = getCommandFolderSearchPaths('.archon/commands');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults', globalPath]);
     });
 
     test('does not duplicate .archon/commands/defaults if configured', () => {
+      const globalPath = join(getArchonHome(), '.archon', 'commands');
       const paths = getCommandFolderSearchPaths('.archon/commands/defaults');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults', globalPath]);
     });
   });
 

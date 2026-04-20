@@ -2007,13 +2007,30 @@ async function executeLoopNode(
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
-      await deps.store.pauseWorkflowRun(workflowRun.id, {
-        nodeId: node.id,
-        message: loop.gate_message,
-        type: 'interactive_loop',
-        iteration: i,
-        sessionId: currentSessionId,
-      });
+      try {
+        await deps.store.pauseWorkflowRun(workflowRun.id, {
+          nodeId: node.id,
+          message: loop.gate_message,
+          type: 'interactive_loop',
+          iteration: i,
+          sessionId: currentSessionId,
+        });
+      } catch (pauseErr) {
+        // pauseWorkflowRun requires status = 'running'. If it fails, the run was externally
+        // transitioned (e.g. cancelled or failed by a SIGTERM handler). Return 'completed' so
+        // the between-layer check detects the non-running status and halts cleanly.
+        const currentStatus = await deps.store
+          .getWorkflowRunStatus(workflowRun.id)
+          .catch(() => null);
+        if (currentStatus !== 'running') {
+          getLog().warn(
+            { workflowRunId: workflowRun.id, currentStatus, err: pauseErr as Error },
+            'dag.loop_pause_skipped_external_transition'
+          );
+          return { state: 'completed', output: lastIterationOutput, costUsd: loopTotalCostUsd };
+        }
+        throw pauseErr;
+      }
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',
         runId: workflowRun.id,
@@ -2192,14 +2209,31 @@ async function executeApprovalNode(
       );
     });
 
-  await deps.store.pauseWorkflowRun(workflowRun.id, {
-    message: node.approval.message,
-    nodeId: node.id,
-    type: 'approval',
-    captureResponse: node.approval.capture_response,
-    onRejectPrompt: node.approval.on_reject?.prompt,
-    onRejectMaxAttempts: node.approval.on_reject?.max_attempts,
-  });
+  try {
+    await deps.store.pauseWorkflowRun(workflowRun.id, {
+      message: node.approval.message,
+      nodeId: node.id,
+      type: 'approval',
+      captureResponse: node.approval.capture_response,
+      onRejectPrompt: node.approval.on_reject?.prompt,
+      onRejectMaxAttempts: node.approval.on_reject?.max_attempts,
+    });
+  } catch (pauseErr) {
+    // pauseWorkflowRun requires status = 'running'. If it fails, the run was externally
+    // transitioned (e.g. cancelled or failed by a SIGTERM handler that fired in the race
+    // window between resumeWorkflowRun and this pause call). Return 'completed' so the
+    // between-layer check detects the non-running status and halts cleanly — the DAG
+    // will not mark the run as failed again since skipIfStatusChanged guards that path.
+    const currentStatus = await deps.store.getWorkflowRunStatus(workflowRun.id).catch(() => null);
+    if (currentStatus !== 'running') {
+      getLog().warn(
+        { workflowRunId: workflowRun.id, currentStatus, err: pauseErr as Error },
+        'dag.approval_pause_skipped_external_transition'
+      );
+      return { state: 'completed' as const, output: '' };
+    }
+    throw pauseErr;
+  }
 
   getWorkflowEventEmitter().emit({
     type: 'approval_pending',

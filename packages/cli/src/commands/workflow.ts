@@ -547,7 +547,11 @@ export async function workflowRunCommand(
     workflowName
   );
 
-  // Register cleanup handlers for graceful termination
+  // Register cleanup handlers for graceful termination.
+  // Handlers are stored by reference so they can be deregistered after executeWorkflow returns,
+  // preventing stale handlers from accumulating across multiple workflowRunCommand invocations
+  // (e.g., when workflowApproveCommand resumes a paused run) and preventing a signal that
+  // arrives after the workflow has paused from incorrectly marking the run as failed.
   let terminating = false;
   const cleanup = (signal: string): void => {
     if (terminating) return;
@@ -572,12 +576,14 @@ export async function workflowRunCommand(
         process.exit(1);
       });
   };
-  process.once('SIGTERM', () => {
+  const sigtermHandler = (): void => {
     cleanup('SIGTERM');
-  });
-  process.once('SIGINT', () => {
+  };
+  const sigintHandler = (): void => {
     cleanup('SIGINT');
-  });
+  };
+  process.once('SIGTERM', sigtermHandler);
+  process.once('SIGINT', sigintHandler);
 
   // Subscribe to workflow events for progress rendering on stderr.
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
@@ -622,6 +628,12 @@ export async function workflowRunCommand(
     );
   } finally {
     unsubscribe?.();
+    // Remove signal handlers now that workflow execution is complete (paused, done, or failed).
+    // This prevents the handlers from firing during normal process cleanup after this function
+    // returns, and stops them from accumulating when workflowRunCommand is called multiple times
+    // within a single CLI invocation (e.g. workflowApproveCommand → workflowRunCommand).
+    process.off('SIGTERM', sigtermHandler);
+    process.off('SIGINT', sigintHandler);
   }
 
   // Check result and exit appropriately
